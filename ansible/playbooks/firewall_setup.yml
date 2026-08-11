@@ -1,0 +1,107 @@
+- name: Configure firewall rules for SSH access
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Allow incoming SSH connections from VirtualBox NAT network
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 10.0.2.2
+        to_ip: "{{ ansible_default_ipv4.address }}"
+        to_port: '22'
+        proto: tcp
+  
+    - name: Allow incoming SSH connections from private Vagrant network
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 192.168.33.1
+        to_ip: "{{ inventory_hostname }}"
+        to_port: '22'
+        proto: tcp
+         
+
+- name: Configure firewall on apps servers
+  hosts: apps
+  vars:
+    web_ports:
+      - "80"
+      - "443"
+  become: true
+
+  tasks:
+    - name: Allow incoming HTTP and HTTPS traffic from LB
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 192.168.33.2
+        to_ip: "{{ inventory_hostname }}"
+        to_port: "{{ item }}"
+        proto: tcp
+
+      loop: "{{ web_ports }}"
+
+- name: Configure firewall on DB server
+  hosts: db
+  vars:
+    apps_servers:
+      - '192.168.33.3'
+      - '192.168.33.4'
+  become: true
+
+  tasks:
+    - name: Allow incoming traffic from apps
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: "{{ item }}"
+        to_ip: "{{ inventory_hostname }}"
+        to_port: '5432'
+        proto: tcp
+
+      loop: "{{ apps_servers }}"
+
+- name: Configure firewall on monitoring server
+  hosts: monitoring
+  vars:
+    monitoring_ports:
+      - "3000"
+      - "9090"
+  become: true
+
+  tasks:
+    - name: Allow incoming traffic to Grafana and Prometheus dashboards
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 192.168.33.1
+        to_ip: "{{ inventory_hostname }}"
+        to_port: "{{ item }}"
+        proto: tcp
+
+      loop: "{{ monitoring_ports }}"
+
+- name: Configure default firewall policies
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Set default incoming policy to deny
+      community.general.ufw:
+        direction: incoming
+        policy: deny
+
+    - name: Set default outgoing policy to allow
+      community.general.ufw:
+        direction: outgoing
+        policy: allow
+
+- name: Enable UFW firewall
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Enable UFW firewall
+      community.general.ufw:
+        state: enabled

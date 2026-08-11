@@ -1,0 +1,23 @@
+- name: Base setup on all hosts
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+    
+    - name: Install essential packages
+      ansible.builtin.apt:
+        name:
+          - git
+          - curl
+          - nano
+          - htop
+        state: present
+
+    - name: Set timezone to UTC
+      community.general.timezone:
+        name: UTC
+        hwclock: UTC
