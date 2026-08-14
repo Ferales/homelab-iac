@@ -9,7 +9,7 @@ chmod 755 /ansible
 chmod 600 ./ansible.cfg
 
 > ~/.ssh/known_hosts
-for ip in 192.168.33.{2..6}; do
+for ip in 192.168.33.{2..7}; do
   ssh-keyscan $ip >> ~/.ssh/known_hosts
 done
 

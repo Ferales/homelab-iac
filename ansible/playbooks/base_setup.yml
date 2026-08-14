@@ -21,3 +21,9 @@
       community.general.timezone:
         name: UTC
         hwclock: UTC
+    
+    - name: Ensure systemd-timesyncd is enabled and running
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        enabled: true
+        state: started

@@ -1,0 +1,8 @@
+- name: Install Docker
+  hosts:
+    - apps
+    - registry
+  become: true
+
+  roles:
+    - docker

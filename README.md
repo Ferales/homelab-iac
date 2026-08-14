@@ -18,15 +18,16 @@ Private network (host-only): `192.168.33.0/28`
 | `app2`       | 192.168.33.4   | Application instance #2        | 4096 MB | 2    |
 | `db`         | 192.168.33.5   | Database                       | 4096 MB | 2    |
 | `monitoring` | 192.168.33.6   | Prometheus + Grafana            | 2048 MB | 1    |
+| `registry`   | 192.168.33.7   | Local Docker registry          | 2048 MB | 1    |
 
 Each machine also has a default NAT adapter (internet access, e.g. for `apt`), not directly reachable from the host.
 
 Access from the host:
 - SSH to any machine directly via its private network address, using the administrator's key (see below)
 - HTTP to `lb`: `http://127.0.0.1:8080` → forwarded to port 80 on `lb`
-- `app1`/`app2`/`db`/`monitoring` are not directly exposed to the host outside the private network — application traffic is intended to reach them only through `lb`
+- `app1`/`app2`/`db`/`monitoring`/`registry` are not directly exposed to the host outside the private network — application traffic is intended to reach them only through `lb`
 
-All five machines run the same base box (`ubuntu/jammy64`) — a machine's role comes entirely from what gets installed/configured on it via Ansible, not from a different base image ("golden image" approach).
+All machines run the same base box (`ubuntu/jammy64`) — a machine's role comes entirely from what gets installed/configured on it via Ansible, not from a different base image ("golden image" approach).
 
 ## Prerequisites
 
@@ -50,13 +51,20 @@ ansible/
 ├── docker-compose.yml
 ├── entrypoint.sh           # copies the private key + generates known_hosts on container start
 ├── ansible.cfg
+├── .env                    # SSH_KEY_PATH; not committed (see .gitignore), local machine-specific config
 ├── inventory/
 │   ├── hosts.yml
 │   └── group_vars/
 │       └── all.yml         # shared connection variables (user, private key path)
-└── playbooks/
-    ├── base_setup.yml      # baseline configuration common to all machines
-    └── firewall_setup.yml  # per-host-group UFW rules + default policies
+├── playbooks/
+│   ├── base_setup.yml             # baseline configuration common to all machines
+│   ├── firewall_setup.yml         # per-host-group UFW rules + default policies
+│   ├── docker_setup.yml           # runs docker group task on specified hosts
+│   └── docker_registry_setup.yml  # runs the registry container + its access rules on registry
+└── roles/
+    └── docker/
+        └── tasks/
+            └── main.yml     # installs Docker Engine (official apt repo) + adds `vagrant` to the docker group
 ```
 
 > **Note on SSH key setup:** administrator key distribution happens in `vagrant/provision/setup-ssh-key.sh`, run as part of `vagrant up` — **not** as an Ansible playbook. This is deliberate: Ansible needs working SSH access to connect in the first place, so the key has to be in place *before* the Ansible controller can reach the machines at all.
@@ -68,7 +76,7 @@ cd vagrant
 vagrant up
 ```
 
-This provisions all five machines, sets up the private network, and installs the administrator's public key into `authorized_keys` on each of them.
+This provisions all six machines, sets up the private network, and installs the administrator's public key into `authorized_keys` on each of them.
 
 Logging into any machine:
 ```bash
@@ -81,18 +89,25 @@ vagrant destroy
 ```
 
 ## Running the Ansible controller
-
+ 
 The Ansible controller runs inside a Docker container rather than on the host directly, to keep the environment self-contained and independent of what's installed locally.
-
+ 
+Create a `.env` file in `ansible/` (not committed — see `.gitignore`) with the path to your private key:
+```
+SSH_KEY_PATH=<path_to_your_private_key>
+```
+ 
+Then:
 ```bash
 cd ../ansible
-$env:SSH_KEY_PATH = "<path_to_your_private_key>"   # PowerShell; use export on Linux/macOS
 docker compose run --rm ansible
 ```
-
-This drops you into an interactive shell inside the controller, with the project files mounted at `/ansible` and the private key copied and secured at `~/.ssh/homelab_key` inside the container. On start, the container also populates `~/.ssh/known_hosts` for all five VM addresses via `ssh-keyscan`.
-
-> **Important:** make sure all five VMs are fully booted (`vagrant up` finished, SSH responsive) *before* starting the Ansible controller container. `entrypoint.sh` currently has no retry/wait logic around `ssh-keyscan` — see [Known limitations](#known-limitations--technical-debt) below.
+ 
+(Alternatively, skip the `.env` file and set `SSH_KEY_PATH` as an environment variable before running the command — `docker-compose` picks up either.)
+ 
+This drops you into an interactive shell inside the controller, with the project files mounted at `/ansible` and the private key copied and secured at `~/.ssh/homelab_key` inside the container. On start, the container also populates `~/.ssh/known_hosts` for all six VM addresses via `ssh-keyscan`.
+ 
+> **Important:** make sure all six VMs are fully booted (`vagrant up` finished, SSH responsive) *before* starting the Ansible controller container. `entrypoint.sh` currently has no retry/wait logic around `ssh-keyscan` — see [Known limitations](#known-limitations--technical-debt) below.
 
 Test connectivity:
 ```bash
@@ -104,7 +119,7 @@ ansible all -m ansible.builtin.ping
 ## Playbooks
 
 ### `base_setup.yml`
-Baseline configuration applied to all five machines: updates the `apt` cache, installs a small set of common tools (`git`, `curl`, `nano`, `htop`), and sets the system timezone to UTC.
+Baseline configuration applied to all six machines: updates the `apt` cache, installs a small set of common tools (`git`, `curl`, `nano`, `htop`), and sets the system timezone to UTC.
 
 ### `firewall_setup.yml`
 Configures UFW on every machine, with rules scoped per host group (`apps`, `db`, `monitoring`) rather than a single `hosts: all` play with `when` conditions. This keeps each group's rules self-contained and readable, and maps cleanly onto future Ansible roles (each group's play is already structured as a natural candidate for extraction into its own role).
@@ -114,6 +129,17 @@ The playbook enforces least-privilege access between machines even though they a
 SSH access is allowed from two distinct sources, corresponding to the two ways a connection can reach a VM: `10.0.2.2` (the host, when connecting directly via `vagrant ssh`/`vagrant provision` over the NAT adapter) and `192.168.33.1` (the host, when connecting via the Ansible controller container over the private network). These were identified empirically via `auth.log` while debugging SSH connectivity.
 
 Play order is deliberate and important: allow rules (SSH, per-group roles) are applied first, then default deny/allow policy, then `ufw enable` last. Reversing this order risks locking out SSH access mid-run.
+
+### `docker_setup.yml` + `roles/docker`
+Installs Docker Engine via the official Docker apt repository (GPG key, repo entry pinned to the detected Ubuntu release, then `docker-ce`/`docker-ce-cli`/`containerd.io`/`docker-compose-plugin`) and adds the `vagrant` user to the `docker` group. Written as a role rather than inline tasks, since the installation logic is entirely generic — it doesn't depend on anything specific to this project and could be reused as-is elsewhere.
+
+### `docker_registry_setup.yml`
+Runs the local Docker registry (`registry:2`) on the `registry` host and locks down access to it. Kept as a plain playbook rather than a role, since — unlike `roles/docker` — its content (image name, port, the specific IPs allowed to pull) is entirely specific to this project and this one host, not something reusable elsewhere.
+
+Two things worth calling out about how container access is restricted here, since they weren't obvious going in:
+
+- **UFW does not control traffic reaching a published container port.** Docker manages its own `iptables` rules (in the `DOCKER` chain) to route traffic to a container's published port, and those rules are evaluated *before* UFW's own chain — so a UFW rule scoped to specific source IPs has no effect on who can reach the container, even though `ufw status` shows it as active and correctly configured. This was caught empirically: a request from a host that should have been blocked went through anyway. Access control for published container ports has to happen in the `DOCKER-USER` chain instead — the chain Docker explicitly leaves for user-defined rules, evaluated before its own. The playbook adds `RETURN` rules there for the allowed IPs, followed by a `DROP` for the rest, in that order (rule order matters — `DROP` must land *after* the `RETURN` rules, not before).
+- **`iptables` rules don't survive a VM restart on their own.** Unlike UFW (which persists its rules via its own systemd service) or Docker (which persists container state itself), rules inserted directly via `iptables` live only in the kernel's in-memory table and are lost on `vagrant halt`/`vagrant up` — even though the container itself comes back fine via `restart_policy: unless-stopped`. The playbook installs `iptables-persistent` and explicitly runs `netfilter-persistent save` *after* the `DOCKER-USER` rules are added, so they're restored automatically on boot without needing to re-run Ansible after every restart.
 
 ## Known limitations / technical debt
 
@@ -152,7 +178,9 @@ Takeaway: when debugging SSH connectivity across virtualized network boundaries,
 - [x] Ansible controller + verified connectivity (Docker, inventory, SSH)
 - [x] Baseline configuration automation (`base_setup.yml`)
 - [x] Firewall segmentation (`firewall_setup.yml`, UFW per host group)
-- [ ] Containerized application (Docker + Node/Express + Postgres)
+- [x] Docker Engine (`roles/docker`, on `app1`/`app2`/`db`/`registry`)
+- [x] Local Docker registry (`registry` host, `DOCKER-USER`-based access control)
+- [ ] Containerized application (Node/Express + Postgres)
 - [ ] Reverse proxy + TLS
 - [ ] Monitoring (Prometheus + Grafana)
 - [ ] Backups and restore testing

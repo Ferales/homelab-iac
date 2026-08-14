@@ -1,0 +1,51 @@
+- name: Setup and start Docker registry container
+  hosts: registry
+  become: true
+
+  tasks:
+    - name: Start Docker registry container
+      community.docker.docker_container:
+        name: registry
+        image: registry:2
+        state: started
+        restart_policy: unless-stopped
+        published_ports:
+          - "5000:5000"
+
+- name: Add iptables rules for DOCKER-USER chain
+  hosts: registry
+  vars:
+    allowed_ips:
+      - "192.168.33.3"
+      - "192.168.33.4"
+  become: true
+
+  tasks:
+    - name: Install iptables-persistent
+      ansible.builtin.apt:
+        name: iptables-persistent
+        state: present
+        update_cache: true
+
+    - name: Allow incoming traffic to local Docker registry from allowed IPs
+      ansible.builtin.iptables:
+        chain: DOCKER-USER
+        jump: RETURN
+        source: "{{ item }}"
+        destination_port: 5000
+        protocol: tcp
+
+      loop: "{{ allowed_ips }}"
+
+    - name: Drop all other incoming traffic to local Docker registry
+      ansible.builtin.iptables:
+        chain: DOCKER-USER
+        jump: DROP
+        source: "192.168.33.0/28"
+        destination_port: 5000
+        protocol: tcp
+
+    - name: Save iptables rules
+      ansible.builtin.command:
+        cmd: netfilter-persistent save
+      changed_when: false
