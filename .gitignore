@@ -1,2 +1,4 @@
 vagrant/.vagrant
+vagrant/shared/key.pub
 .env
+node_modules/
