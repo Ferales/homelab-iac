@@ -2,7 +2,29 @@
   hosts:
     - apps
     - registry
+    - db
   become: true
 
   roles:
     - docker
+
+- name: Add Docker registry to insecure registries
+  hosts: apps
+  become: true
+
+  tasks:
+    - name: Add Docker registry to insecure registries
+      ansible.builtin.template:
+        src: templates/daemon.json.j2
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      notify: 
+        - Restart Docker
+  
+  handlers:
+    - name: Restart Docker
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted

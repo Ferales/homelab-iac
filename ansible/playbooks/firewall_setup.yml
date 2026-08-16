@@ -17,7 +17,7 @@
         rule: allow
         direction: in
         from_ip: 192.168.33.1
-        to_ip: "{{ inventory_hostname }}"
+        to_ip: "{{ ansible_host  }}"
         to_port: '22'
         proto: tcp
          
@@ -36,7 +36,7 @@
         rule: allow
         direction: in
         from_ip: 192.168.33.2
-        to_ip: "{{ inventory_hostname }}"
+        to_ip: "{{ ansible_host  }}"
         to_port: "{{ item }}"
         proto: tcp
 
@@ -56,7 +56,7 @@
         rule: allow
         direction: in
         from_ip: "{{ item }}"
-        to_ip: "{{ inventory_hostname }}"
+        to_ip: "{{ ansible_host  }}"
         to_port: '5432'
         proto: tcp
 
@@ -76,7 +76,7 @@
         rule: allow
         direction: in
         from_ip: 192.168.33.1
-        to_ip: "{{ inventory_hostname }}"
+        to_ip: "{{ ansible_host }}"
         to_port: "{{ item }}"
         proto: tcp
 

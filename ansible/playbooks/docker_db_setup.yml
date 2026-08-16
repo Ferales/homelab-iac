@@ -1,0 +1,57 @@
+- name: Setup and start Docker database container
+  hosts: db
+  become: true
+
+  tasks:
+    - name: Start Docker database container
+      community.docker.docker_container:
+        name: db
+        image: "{{ postgres_image }}"
+        state: started
+        restart_policy: unless-stopped
+        env:
+          POSTGRES_USER: "{{ postgres_user }}"
+          POSTGRES_PASSWORD: "{{ db_password }}"
+          POSTGRES_DB: "{{ postgres_db }}"
+        volumes:
+          - "{{ postgres_data_path }}:/var/lib/postgresql/data"
+        published_ports:
+          - "5432:5432"
+
+- name: Add iptables rules for DOCKER-USER chain
+  hosts: db
+  vars:
+    allowed_ips:
+      - "192.168.33.3"
+      - "192.168.33.4"
+  become: true
+
+  tasks:
+    - name: Install iptables-persistent
+      ansible.builtin.apt:
+        name: iptables-persistent
+        state: present
+        update_cache: true
+
+    - name: Allow incoming traffic to local Docker database from allowed IPs
+      ansible.builtin.iptables:
+        chain: DOCKER-USER
+        jump: RETURN
+        source: "{{ item }}"
+        destination_port: 5432
+        protocol: tcp
+
+      loop: "{{ allowed_ips }}"
+
+    - name: Drop all other incoming traffic to local Docker database
+      ansible.builtin.iptables:
+        chain: DOCKER-USER
+        jump: DROP
+        source: "192.168.33.0/28"
+        destination_port: 5432
+        protocol: tcp
+
+    - name: Save iptables rules
+      ansible.builtin.command:
+        cmd: netfilter-persistent save
+      changed_when: false

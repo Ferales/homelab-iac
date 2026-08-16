@@ -2,3 +2,4 @@ vagrant/.vagrant
 vagrant/shared/key.pub
 .env
 node_modules/
+ansible/vault/pass.txt

@@ -1,0 +1,53 @@
+- name: Setup and start Docker apps container
+  hosts: apps
+  become: true
+
+  tasks:
+    - name: Start Docker apps container
+      community.docker.docker_container:
+        name: app
+        image: 192.168.33.7:5000/counter-app:latest
+        state: started
+        restart_policy: unless-stopped
+        env:
+          DB_HOST: "{{ db_host }}"
+          DB_PORT: "{{ db_port | string }}"
+          DB_USER: "{{ db_user }}"
+          DB_PASSWORD: "{{ db_password }}"
+          DB_NAME: "{{ db_name }}"
+          INSTANCE_NAME: "{{ instance_name }}"
+          PORT: "{{ app_port | string }}"
+        published_ports:
+          - "{{ app_port }}:{{ app_port }}"
+
+- name: Add iptables rules for DOCKER-USER chain
+  hosts: apps
+  become: true
+
+  tasks:
+    - name: Install iptables-persistent
+      ansible.builtin.apt:
+        name: iptables-persistent
+        state: present
+        update_cache: true
+
+    - name: Allow incoming traffic to local Docker app instances from allowed IPs
+      ansible.builtin.iptables:
+        chain: DOCKER-USER
+        jump: RETURN
+        source: 192.168.33.2
+        destination_port: "{{ app_port }}"
+        protocol: tcp
+
+    - name: Drop all other incoming traffic to local Docker app instances
+      ansible.builtin.iptables:
+        chain: DOCKER-USER
+        jump: DROP
+        source: "192.168.33.0/28"
+        destination_port: "{{ app_port }}"
+        protocol: tcp
+
+    - name: Save iptables rules
+      ansible.builtin.command:
+        cmd: netfilter-persistent save
+      changed_when: false

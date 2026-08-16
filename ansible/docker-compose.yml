@@ -4,5 +4,6 @@ services:
     volumes:
       - ./:/ansible
       - ${SSH_KEY_PATH}:/keys/homelab_key:ro
+      - ${VAULT_PASSWORD_PATH}:/pass.txt:ro
     tty: true
     stdin_open: true

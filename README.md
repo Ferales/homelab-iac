@@ -33,7 +33,11 @@ All machines run the same base box (`ubuntu/jammy64`) — a machine's role comes
 
 - [Vagrant](https://developer.hashicorp.com/vagrant)
 - [VirtualBox](https://www.virtualbox.org/)
-- Your own SSH key pair (not included in this repo) — generate one locally and place the **public** key at `vagrant/shared/key.pub`
+- Your own SSH key pair (not included in this repo) — generate one locally, e.g.:
+  ```bash
+  ssh-keygen -t ed25519 -f ./homelab_key -C "homelab"
+  ```
+  then place the **public** key (`homelab_key.pub`) at `vagrant/shared/key.pub`, and keep the private key (`homelab_key`) somewhere outside the repo — its path is what `SSH_KEY_PATH` in `.env` needs to point to (see [Running the Ansible controller](#running-the-ansible-controller) below).
 - [Docker](https://www.docker.com/) (for the Ansible controller container)
 
 ## Repository structure
@@ -50,24 +54,64 @@ ansible/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── entrypoint.sh           # copies the private key + generates known_hosts on container start
-├── ansible.cfg
-├── .env                    # SSH_KEY_PATH; not committed (see .gitignore), local machine-specific config
+├── ansible.cfg             # points to inventory/, roles/, and the vault password file
+├── .env                    # SSH_KEY_PATH, VAULT_PASSWORD_PATH; not committed (see .gitignore)
+├── vault/
+│   └── pass.txt            # Ansible Vault password; not committed, mounted from the host (see .env)
 ├── inventory/
-│   ├── hosts.yml
+│   ├── hosts.yml            # host aliases (app1/app2/db/...) mapped to their private-network IPs via ansible_host
 │   └── group_vars/
-│       └── all.yml         # shared connection variables (user, private key path)
+│       ├── all.yml          # shared connection variables (user, private key path)
+│       ├── db/
+│       │   ├── vars.yml     # Postgres user/db name/image/data path
+│       │   └── vault.yml    # Postgres password, Vault-encrypted
+│       └── apps/
+│           ├── vars.yml     # DB connection info, app port, per-host instance name
+│           └── vault.yml    # DB password (same secret, kept alongside the app's own connection vars)
 ├── playbooks/
-│   ├── base_setup.yml             # baseline configuration common to all machines
-│   ├── firewall_setup.yml         # per-host-group UFW rules + default policies
-│   ├── docker_setup.yml           # runs docker group task on specified hosts
-│   └── docker_registry_setup.yml  # runs the registry container + its access rules on registry
+│   ├── site.yml                    # imports every playbook below, in the order needed to bring the whole stack up
+│   ├── base_setup.yml              # baseline configuration common to all machines
+│   ├── firewall_setup.yml          # per-host-group UFW rules + default policies
+│   ├── docker_setup.yml            # installs the docker role on app1/app2/db/registry, plus insecure-registries config on app1/app2
+│   ├── docker_registry_setup.yml   # runs the registry container + its access rules on registry
+│   ├── docker_db_setup.yml         # runs the Postgres container + its access rules on db
+│   ├── app_setup.yml               # runs the counter-app container + its access rules on app1/app2
+│   └── templates/
+│       └── daemon.json.j2   # insecure-registries config for the Docker daemon
 └── roles/
     └── docker/
         └── tasks/
             └── main.yml     # installs Docker Engine (official apt repo) + adds `vagrant` to the docker group
+
+app/
+├── Dockerfile
+├── .dockerignore
+├── package.json
+├── package-lock.json
+└── index.js                # Express app: GET / increments a Postgres-backed counter, GET /health
 ```
 
 > **Note on SSH key setup:** administrator key distribution happens in `vagrant/provision/setup-ssh-key.sh`, run as part of `vagrant up` — **not** as an Ansible playbook. This is deliberate: Ansible needs working SSH access to connect in the first place, so the key has to be in place *before* the Ansible controller can reach the machines at all.
+
+## Secrets (Ansible Vault)
+
+The Postgres password is the only real secret in this project, and it's encrypted with [Ansible Vault](https://docs.ansible.com/ansible/latest/vault_guide/index.html) rather than kept as plaintext — even in a homelab, since the whole point of demonstrating this is to do it properly, not as security theater.
+
+The Vault password itself is **not** committed (same reasoning as the SSH key: it's the key that unlocks the secret, so it can't live next to the thing it protects). Before running any playbook that touches `db` or `apps`, generate your own:
+
+```bash
+openssl rand -base64 32 > vault/pass.txt
+```
+
+Then encrypt your own Postgres password with it, and paste the output into `inventory/group_vars/db/vault.yml` (and mirror it into `inventory/group_vars/apps/vault.yml`, since the app containers need the same password to connect):
+
+```bash
+ansible-vault encrypt_string 'your-password-here' --name 'db_password' > inventory/group_vars/db/vault.yml
+```
+
+> **Note:** the encrypted value committed in this repo was encrypted with the author's own Vault password — it's not usable by anyone who clones the repo without generating their own `vault/pass.txt` and re-encrypting their own password, exactly as intended.
+
+`vault/pass.txt` is mounted into the Ansible controller container (see `.env`/`docker-compose.yml` below), and `ansible.cfg` points to it automatically — no `--ask-vault-pass`/`--vault-password-file` flag needed on every command.
 
 ## Bringing the environment up from scratch
 
@@ -89,24 +133,25 @@ vagrant destroy
 ```
 
 ## Running the Ansible controller
- 
+
 The Ansible controller runs inside a Docker container rather than on the host directly, to keep the environment self-contained and independent of what's installed locally.
- 
-Create a `.env` file in `ansible/` (not committed — see `.gitignore`) with the path to your private key:
+
+Create a `.env` file in `ansible/` (not committed — see `.gitignore`) with the path to your private key and your Vault password file:
 ```
 SSH_KEY_PATH=<path_to_your_private_key>
+VAULT_PASSWORD_PATH=<path_to_your_vault_pass_file>
 ```
- 
+
 Then:
 ```bash
 cd ../ansible
 docker compose run --rm ansible
 ```
- 
-(Alternatively, skip the `.env` file and set `SSH_KEY_PATH` as an environment variable before running the command — `docker-compose` picks up either.)
- 
+
+(Alternatively, skip the `.env` file and set both as environment variables before running the command — `docker-compose` picks up either.)
+
 This drops you into an interactive shell inside the controller, with the project files mounted at `/ansible` and the private key copied and secured at `~/.ssh/homelab_key` inside the container. On start, the container also populates `~/.ssh/known_hosts` for all six VM addresses via `ssh-keyscan`.
- 
+
 > **Important:** make sure all six VMs are fully booted (`vagrant up` finished, SSH responsive) *before* starting the Ansible controller container. `entrypoint.sh` currently has no retry/wait logic around `ssh-keyscan` — see [Known limitations](#known-limitations--technical-debt) below.
 
 Test connectivity:
@@ -116,7 +161,15 @@ ansible all -m ansible.builtin.ping
 
 > **Note:** if the controller container cannot reach the VMs over SSH (`Connection timed out`), check Windows Firewall — see [Troubleshooting notes](#ansible-controller-docker-could-not-reach-the-vms-over-ssh--windows-firewall) below.
 
+Provision the entire stack, in the correct order, with a single command:
+```bash
+ansible-playbook playbooks/site.yml
+```
+
 ## Playbooks
+
+### `site.yml`
+The single entry point for provisioning the whole stack. Imports every other playbook, in the order their dependencies require: base config and firewall first, then the Docker engine (needed by everything below it), then the registry (needed before anything can pull an image from it), then the database, then the application containers. Adding a new playbook to the stack means adding one `import_playbook` line here, in the right position — nothing else changes.
 
 ### `base_setup.yml`
 Baseline configuration applied to all six machines: updates the `apt` cache, installs a small set of common tools (`git`, `curl`, `nano`, `htop`), and sets the system timezone to UTC.
@@ -133,6 +186,8 @@ Play order is deliberate and important: allow rules (SSH, per-group roles) are a
 ### `docker_setup.yml` + `roles/docker`
 Installs Docker Engine via the official Docker apt repository (GPG key, repo entry pinned to the detected Ubuntu release, then `docker-ce`/`docker-ce-cli`/`containerd.io`/`docker-compose-plugin`) and adds the `vagrant` user to the `docker` group. Written as a role rather than inline tasks, since the installation logic is entirely generic — it doesn't depend on anything specific to this project and could be reused as-is elsewhere.
 
+A second play in the same file, scoped to `apps` only, templates `/etc/docker/daemon.json` with `insecure-registries` pointing at `192.168.33.7:5000` and restarts Docker via a handler. This isn't part of `roles/docker` itself, since the registry's address is specific to this project, not something a generic "install Docker" role should know about. Without it, Docker refuses to pull from the local registry at all, since it has no TLS certificate.
+
 ### `docker_registry_setup.yml`
 Runs the local Docker registry (`registry:2`) on the `registry` host and locks down access to it. Kept as a plain playbook rather than a role, since — unlike `roles/docker` — its content (image name, port, the specific IPs allowed to pull) is entirely specific to this project and this one host, not something reusable elsewhere.
 
@@ -140,6 +195,36 @@ Two things worth calling out about how container access is restricted here, sinc
 
 - **UFW does not control traffic reaching a published container port.** Docker manages its own `iptables` rules (in the `DOCKER` chain) to route traffic to a container's published port, and those rules are evaluated *before* UFW's own chain — so a UFW rule scoped to specific source IPs has no effect on who can reach the container, even though `ufw status` shows it as active and correctly configured. This was caught empirically: a request from a host that should have been blocked went through anyway. Access control for published container ports has to happen in the `DOCKER-USER` chain instead — the chain Docker explicitly leaves for user-defined rules, evaluated before its own. The playbook adds `RETURN` rules there for the allowed IPs, followed by a `DROP` for the rest, in that order (rule order matters — `DROP` must land *after* the `RETURN` rules, not before).
 - **`iptables` rules don't survive a VM restart on their own.** Unlike UFW (which persists its rules via its own systemd service) or Docker (which persists container state itself), rules inserted directly via `iptables` live only in the kernel's in-memory table and are lost on `vagrant halt`/`vagrant up` — even though the container itself comes back fine via `restart_policy: unless-stopped`. The playbook installs `iptables-persistent` and explicitly runs `netfilter-persistent save` *after* the `DOCKER-USER` rules are added, so they're restored automatically on boot without needing to re-run Ansible after every restart.
+
+The same `DOCKER-USER` + `iptables-persistent` pattern established here is reused, unchanged in approach, by `docker_db_setup.yml` and `app_setup.yml` below.
+
+### `docker_db_setup.yml`
+Runs Postgres (`postgres:16-alpine`) on the `db` host, with `DOCKER-USER` rules restricting access on `5432` to `app1`/`app2` only. Uses a bind mount (`postgres_data_path` → `/var/lib/postgresql/data`) rather than a named Docker volume, so the data lives at a known, explicit path on the VM's own filesystem — chosen deliberately with the future "Backups and restore testing" milestone in mind, since a plain directory is trivial to point a backup script at, where a named volume would require going through Docker itself to get at the same files. Verified empirically that data survives both `vagrant halt`/`up` and a full container recreate.
+
+The Postgres password is Vault-encrypted (see [Secrets](#secrets-ansible-vault) above) and lives in `inventory/group_vars/db/vault.yml`, alongside the plaintext connection details (`inventory/group_vars/db/vars.yml`).
+
+### `app_setup.yml`
+Runs the `counter-app` container (pulled from the local registry) on both `app1` and `app2`, with `DOCKER-USER` rules restricting access on `3000` to `lb` only — set up ahead of time, even though `lb` isn't running anything yet.
+
+Each instance gets `INSTANCE_NAME` set to `{{ inventory_hostname }}`, which resolves to the host's alias (`app1`/`app2`) rather than its IP, since `inventory/hosts.yml` defines hosts by name with the actual address in `ansible_host`. The app returns this value in its response (`served_by`), which is what makes it possible to see, from the outside, which of the two instances handled a given request — the whole point of this app existing.
+
+## Building and publishing the application image
+
+Building and pushing the `counter-app` image is a deliberately manual step at this stage, not something `site.yml` does — provisioning infrastructure (Ansible's job) and building/publishing a code artifact are different kinds of work, and the latter already has its own dedicated milestone ahead (CI/CD). Automating it now would mean solving that problem twice.
+
+Docker Desktop can't reach the private network directly (same root cause as the Windows Firewall issue below), so the image has to be built from a machine that's actually on `192.168.33.0/28` — `app1` works well since it's already provisioned:
+
+```bash
+vagrant ssh app1
+git clone <this-repo-url>
+cd <repo>/app
+docker build -t 192.168.33.7:5000/counter-app:latest .
+docker push 192.168.33.7:5000/counter-app:latest
+```
+
+> **Note:** the registry has no TLS certificate (see `docker_setup.yml` above) — a real self-signed cert would need distributing and trusting on every client, which isn't worth the overhead here since all traffic stays inside the isolated private network anyway. `insecure-registries` is a deliberate, documented trade-off, not an oversight.
+
+Since the registry's own container has no persistent storage for pushed images, a full `vagrant destroy` that includes `registry` wipes any previously pushed image — `app_setup.yml` will fail to pull until the image is rebuilt and pushed again.
 
 ## Known limitations / technical debt
 
@@ -180,7 +265,7 @@ Takeaway: when debugging SSH connectivity across virtualized network boundaries,
 - [x] Firewall segmentation (`firewall_setup.yml`, UFW per host group)
 - [x] Docker Engine (`roles/docker`, on `app1`/`app2`/`db`/`registry`)
 - [x] Local Docker registry (`registry` host, `DOCKER-USER`-based access control)
-- [ ] Containerized application (Node/Express + Postgres)
+- [x] Containerized application (Node/Express + Postgres, `site.yml` provisions the full stack)
 - [ ] Reverse proxy + TLS
 - [ ] Monitoring (Prometheus + Grafana)
 - [ ] Backups and restore testing

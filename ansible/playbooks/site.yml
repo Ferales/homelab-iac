@@ -1,0 +1,6 @@
+- import_playbook: base_setup.yml
+- import_playbook: firewall_setup.yml
+- import_playbook: docker_setup.yml
+- import_playbook: docker_registry_setup.yml
+- import_playbook: docker_db_setup.yml
+- import_playbook: app_setup.yml

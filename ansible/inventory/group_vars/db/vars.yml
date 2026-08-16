@@ -1,0 +1,4 @@
+postgres_user: appuser
+postgres_db: appdb
+postgres_image: "postgres:16-alpine"
+postgres_data_path: /opt/postgres-data
