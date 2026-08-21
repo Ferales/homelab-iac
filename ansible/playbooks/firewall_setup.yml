@@ -82,6 +82,26 @@
 
       loop: "{{ monitoring_ports }}"
 
+- name: Configure firewall on LB server
+  hosts: lb
+  vars:
+    web_ports:
+      - "80"
+      - "443"
+  become: true
+
+  tasks:
+    - name: Allow incoming HTTP and HTTPS traffic from the private Vagrant network
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 10.0.2.2
+        to_ip: "{{ ansible_default_ipv4.address }}"
+        to_port: "{{ item }}"
+        proto: tcp
+
+      loop: "{{ web_ports }}"
+
 - name: Configure default firewall policies
   hosts: all
   become: true

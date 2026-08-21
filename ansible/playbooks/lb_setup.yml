@@ -1,0 +1,73 @@
+- name: Install Nginx
+  hosts: lb
+  become: true
+
+  tasks:
+    - name: Install Nginx package
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+        update_cache: true
+
+- name: Configure and install certificates for Nginx
+  hosts: lb
+  become: true
+
+  tasks:
+    - name: Create directory for SSL certificates
+      ansible.builtin.file:
+        path: /etc/nginx/ssl
+        state: directory
+        mode: '0755'
+    
+    - name: Generate private key
+      community.crypto.openssl_privatekey:
+        path: /etc/nginx/ssl/nginx.key
+
+    - name: Generate CSR (Certificate Signing Request)
+      community.crypto.openssl_csr:
+        privatekey_path: /etc/nginx/ssl/nginx.key
+        path: /etc/nginx/ssl/nginx.csr
+        common_name: 127.0.0.1
+        subject_alt_name: "IP:127.0.0.1"
+
+    - name: Generate self-signed certificate
+      community.crypto.x509_certificate:
+        path: /etc/nginx/ssl/nginx.crt
+        privatekey_path: /etc/nginx/ssl/nginx.key
+        csr_path: /etc/nginx/ssl/nginx.csr
+        provider: selfsigned
+
+- name: Configure Nginx
+  hosts: lb
+  become: true
+
+  tasks:
+    - name: Delete default Nginx site configuration
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify:
+      - Restart Nginx  
+
+    - name: Copy Nginx configuration file
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/apps
+        mode: '0644'
+      notify:
+      - Restart Nginx  
+
+    - name: Enable Nginx site configuration
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/apps
+        dest: /etc/nginx/sites-enabled/apps
+        state: link
+      notify:
+      - Restart Nginx  
+  
+  handlers:
+    - name: Restart Nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
