@@ -1,0 +1,68 @@
+- name: Start Node Exporter
+  hosts:
+    - apps
+    - registry
+    - db
+    - lb
+  become: true
+
+  roles:
+    - node_exporter
+
+- name: Setup and start Prometheus and Grafana containers
+  hosts: monitoring
+  become: true
+
+  tasks:
+    - name: Create Docker network for monitoring stack
+      community.docker.docker_network:
+        name: monitoring
+        state: present
+
+    - name: Create Prometheus data directory
+      ansible.builtin.file:
+        path: "{{ prometheus_data_path }}"
+        state: directory
+        owner: "65534"
+        mode: '0755' 
+
+    - name: Create Prometheus configuration file
+      ansible.builtin.template:
+        src: prometheus.yml.j2
+        dest: "{{ prometheus_config_path }}"
+        owner: root
+        mode: '0644'
+      notify: 
+        - Reload Prometheus
+
+    - name: Start Prometheus Docker container
+      community.docker.docker_container:
+        name: prometheus
+        image: "{{ prometheus_image }}"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: monitoring
+        volumes:
+          - "{{ prometheus_config_path }}:/etc/prometheus/prometheus.yml"
+          - "{{ prometheus_data_path }}:/prometheus"
+
+    - name: Start Grafana Docker container
+      community.docker.docker_container:
+        name: grafana
+        image: "{{ grafana_image }}"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: monitoring
+        ports:
+          - "3000:3000"
+        env:
+          GF_SECURITY_ADMIN_USER: admin
+          GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+      no_log: true
+  
+  handlers:
+    - name: Reload Prometheus
+      ansible.builtin.command:
+        cmd: docker kill -s HUP prometheus

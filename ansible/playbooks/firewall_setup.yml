@@ -17,7 +17,7 @@
         rule: allow
         direction: in
         from_ip: 192.168.33.1
-        to_ip: "{{ ansible_host  }}"
+        to_ip: "{{ ansible_host }}"
         to_port: '22'
         proto: tcp
          
@@ -64,23 +64,17 @@
 
 - name: Configure firewall on monitoring server
   hosts: monitoring
-  vars:
-    monitoring_ports:
-      - "3000"
-      - "9090"
   become: true
 
   tasks:
-    - name: Allow incoming traffic to Grafana and Prometheus dashboards
+    - name: Allow incoming traffic to Grafana
       community.general.ufw:
         rule: allow
         direction: in
         from_ip: 192.168.33.1
         to_ip: "{{ ansible_host }}"
-        to_port: "{{ item }}"
+        to_port: "3000"
         proto: tcp
-
-      loop: "{{ monitoring_ports }}"
 
 - name: Configure firewall on LB server
   hosts: lb
@@ -101,6 +95,20 @@
         proto: tcp
 
       loop: "{{ web_ports }}"
+
+- name: Configure firwall for monitoring traffic
+  hosts: apps, registry, db, lb
+  become: true
+
+  tasks:
+    - name: Allow incoming traffic from monitoring server to Node Exporter
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 192.168.33.6
+        to_ip: "{{ ansible_host }}"
+        to_port: '9100'
+        proto: tcp
 
 - name: Configure default firewall policies
   hosts: all

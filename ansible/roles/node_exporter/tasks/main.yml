@@ -1,0 +1,35 @@
+- name: Ensure Node Exporter binary path exists
+  ansible.builtin.file:
+    path: "{{ node_exporter_install_path }}"
+    state: directory
+
+- name: Download and unpack Node Exporter
+  ansible.builtin.unarchive:
+    src: "{{ node_exporter_url }}"
+    dest: "{{ node_exporter_install_path }}"
+    remote_src: true
+    extra_opts: [--strip-components=1]
+
+- name: Create dedicated user for Node Exporter
+  ansible.builtin.user:
+    name: "{{ node_exporter_user }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+
+- name: Install Node Exporter systemd unit file
+  ansible.builtin.template:
+    src: node_exporter.service.j2
+    dest: /etc/systemd/system/node_exporter.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: 
+    - Restart Node Exporter
+
+- name: Enable and start Node Exporter service
+  ansible.builtin.systemd_service:
+    name: node_exporter
+    enabled: true
+    state: started
+    daemon_reload: true

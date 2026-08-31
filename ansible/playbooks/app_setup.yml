@@ -19,6 +19,7 @@
           PORT: "{{ app_port | string }}"
         published_ports:
           - "{{ app_port }}:{{ app_port }}"
+      no_log: true
 
 - name: Add iptables rules for DOCKER-USER chain
   hosts: apps

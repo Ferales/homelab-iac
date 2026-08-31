@@ -3,6 +3,7 @@
     - apps
     - registry
     - db
+    - monitoring
   become: true
 
   roles:

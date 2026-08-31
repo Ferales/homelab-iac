@@ -3,6 +3,26 @@
   become: true
 
   tasks:
+    - name: Set timezone to Europe/Warsaw
+      community.general.timezone:
+        name: Europe/Warsaw
+        hwclock: UTC
+
+    - name: Restart systemd-timesyncd
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        enabled: true
+        state: restarted
+
+    - name: Wait for system clock synchronization
+      ansible.builtin.command:
+        cmd: timedatectl show -p NTPSynchronized --value
+      register: ntp_sync
+      until: ntp_sync.stdout | trim == "yes"
+      retries: 30
+      delay: 2
+      changed_when: false  
+
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: yes
@@ -16,14 +36,3 @@
           - nano
           - htop
         state: present
-
-    - name: Set timezone to UTC
-      community.general.timezone:
-        name: UTC
-        hwclock: UTC
-    
-    - name: Ensure systemd-timesyncd is enabled and running
-      ansible.builtin.systemd:
-        name: systemd-timesyncd
-        enabled: true
-        state: started

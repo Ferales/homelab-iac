@@ -1,0 +1,4 @@
+node_exporter_url: "https://github.com/prometheus/node_exporter/releases/download/v1.12.1/node_exporter-1.12.1.linux-amd64.tar.gz"
+node_exporter_install_path: "/usr/local/bin/node_exporter"
+node_exporter_user: "node_exporter"
+node_exporter_listen_address: "{{ ansible_host }}:9100"

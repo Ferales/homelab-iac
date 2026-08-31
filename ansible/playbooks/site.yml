@@ -5,3 +5,4 @@
 - import_playbook: docker_db_setup.yml
 - import_playbook: app_setup.yml
 - import_playbook: lb_setup.yml
+- import_playbook: monitoring_setup.yml
