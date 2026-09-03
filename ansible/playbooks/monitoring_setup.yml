@@ -35,6 +35,42 @@
       notify: 
         - Reload Prometheus
 
+    - name: Create Grafana provisioning directories
+      ansible.builtin.file:
+        path: "{{ grafana_provisioning_path }}/{{ item }}"
+        state: directory
+        owner: root
+        mode: '0755'
+      loop:
+        - datasources
+        - dashboards
+
+    - name: Create Grafana dashboards directory
+      ansible.builtin.file:
+        path: "{{ grafana_dashboards_path }}"
+        state: directory
+        owner: root
+        mode: '0755'
+
+    - name: Copy Grafana provisioning files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ grafana_provisioning_path }}/{{ item.dest }}"
+        owner: root
+        mode: '0644'
+      loop:
+        - { src: 'templates/grafana-provisioning/datasource.yml', dest: 'datasources/datasource.yml' }
+        - { src: 'templates/grafana-provisioning/dashboard-provider.yml', dest: 'dashboards/dashboard-provider.yml' }
+
+    - name: Copy Grafana dashboard files
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ grafana_dashboards_path }}/{{ item.dest }}"
+        owner: root
+        mode: '0644'
+      loop:
+        - { src: 'templates/grafana-provisioning/node_exporter_overview.json', dest: 'node_exporter_overview.json' }
+
     - name: Start Prometheus Docker container
       community.docker.docker_container:
         name: prometheus
@@ -57,6 +93,9 @@
           - name: monitoring
         ports:
           - "3000:3000"
+        volumes:
+          - "{{ grafana_provisioning_path }}:/etc/grafana/provisioning"
+          - "{{ grafana_dashboards_path }}:/var/lib/grafana/dashboards"
         env:
           GF_SECURITY_ADMIN_USER: admin
           GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"

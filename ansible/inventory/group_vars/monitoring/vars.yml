@@ -3,3 +3,5 @@ grafana_image: grafana/grafana:13.2.0
 prometheus_scrape_interval: 15s
 prometheus_config_path: /opt/monitoring/prometheus/prometheus.yml
 prometheus_data_path: /opt/monitoring/prometheus/data
+grafana_provisioning_path: /opt/monitoring/grafana/provisioning
+grafana_dashboards_path: /opt/monitoring/grafana/dashboards

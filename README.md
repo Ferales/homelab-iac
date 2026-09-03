@@ -71,7 +71,7 @@ ansible/
 │       │   ├── vars.yml     # DB connection info, app port, per-host instance name
 │       │   └── vault.yml    # DB password (same secret, kept alongside the app's own connection vars)
 │       └── monitoring/
-│           ├── vars.yml     # Prometheus/Grafana images, scrape interval, data/config paths
+│           ├── vars.yml     # Prometheus/Grafana images, scrape interval, data/config paths, Grafana provisioning/dashboards paths
 │           └── vault.yml    # Grafana admin password, Vault-encrypted
 ├── playbooks/
 │   ├── site.yml                    # imports every playbook below, in the order needed to bring the whole stack up
@@ -82,11 +82,15 @@ ansible/
 │   ├── docker_db_setup.yml         # runs the Postgres container + its access rules on db
 │   ├── app_setup.yml               # runs the counter-app container + its access rules on app1/app2
 │   ├── lb_setup.yml                # installs native Nginx, generates a self-signed TLS cert, configures the reverse proxy
-│   ├── monitoring_setup.yml        # runs Prometheus + Grafana on monitoring, in a shared Docker network
+│   ├── monitoring_setup.yml        # runs Prometheus + Grafana on monitoring, in a shared Docker network; provisions the Grafana data source + dashboard as code
 │   └── templates/
 │       ├── daemon.json.j2       # insecure-registries config for the Docker daemon
 │       ├── nginx.conf.j2        # upstream + HTTPS server block + HTTP→HTTPS redirect
-│       └── prometheus.yml.j2    # scrape_configs, targets generated from inventory (groups['all'], minus monitoring itself)
+│       ├── prometheus.yml.j2    # scrape_configs, targets generated from inventory (groups['all'], minus monitoring itself)
+│       └── grafana-provisioning/
+│           ├── datasource.yml              # Prometheus data source, with a fixed uid so dashboard panels keep working across re-provisioning
+│           ├── dashboard-provider.yml      # tells Grafana to auto-load dashboard JSON files from disk
+│           └── node_exporter_overview.json # the dashboard itself, exported directly from the Grafana UI
 └── roles/
     ├── docker/
     │   └── tasks/
@@ -278,7 +282,14 @@ The config file itself is a bind-mounted single file (`prometheus_config_path`, 
 
 The Grafana admin password is Vault-encrypted (see [Secrets](#secrets-ansible-vault) above) and passed in via `GF_SECURITY_ADMIN_PASSWORD`; the task has `no_log: true` set, the same pattern applied to the Postgres and application containers above.
 
-Prometheus is added as a Grafana data source manually via the UI after first login (`http://prometheus:9090`, reachable by container name thanks to the shared Docker network) — not yet automated via provisioning files, a deliberate scope cut for this first pass at the monitoring stack.
+**Both the Prometheus data source and the dashboard itself are provisioned as code**, via files mounted into `/etc/grafana/provisioning` and `/var/lib/grafana/dashboards` respectively (`grafana_provisioning_path`/`grafana_dashboards_path`, host-side). The data source's `uid` is deliberately hardcoded in `datasource.yml` (rather than left to Grafana's default random generation) so that it matches the `uid` every panel in the dashboard JSON references — without this, a freshly provisioned data source would get a new random `uid` on every `vagrant destroy`/`up`, silently breaking every panel's link to it. The dashboard itself (`node_exporter_overview.json`) is a direct export from the Grafana UI, not hand-written, and covers six panels:
+
+- **Memory usage (%)** and **CPU usage (%)** — Gauge panels, one value per host, thresholds at 60/80 and 70/90 respectively.
+- **Network receive/transmit (internal)** — Time series panels, filtered to the `enp0s8` interface only (the private-network one; `lo`, `docker0`, and the NAT-facing `enp0s3` are excluded), using `irate()` for responsiveness on a live-refreshing dashboard.
+- **Status (up/down)** — a Stat panel on the raw `up` metric, with Grafana value mappings turning `0`/`1` into "DOWN"/"UP" text, and thresholds colored accordingly.
+- **Load average (1m, per-core)** — `node_load1` divided by each host's core count (`count by (instance) (node_cpu_seconds_total{mode="idle"})`, joined via `on (instance)` since the two sides don't share the `job` label), so hosts with different `vCPU` counts are directly comparable rather than reading raw, unnormalized load values.
+
+Verified empirically by deleting the dashboard through the UI and re-running `site.yml` — it reappears automatically, unchanged.
 
 ## Building and publishing the application image
 
@@ -321,7 +332,7 @@ should return `301 Moved Permanently` with a `Location: https://127.0.0.1:8443/`
 Once `site.yml` has finished:
 
 1. Open Grafana at `http://192.168.33.6:3000` and log in as `admin` with the Vault-encrypted password.
-2. Add Prometheus as a data source (`http://prometheus:9090`) if not already provisioned — **Save & test** should report a successful query, confirming both that Prometheus is reachable and that the shared Docker network/DNS is working as intended.
+2. The Prometheus data source and the "Node Exporter Overview" dashboard should already be present — both are provisioned automatically (see `monitoring_setup.yml` above). If the dashboard is missing, check `docker logs grafana` for provisioning errors.
 3. In **Explore**, run the query `up` — it should return five series, one per host other than `monitoring` itself, each with a value of `1`.
 
 Targets can also be checked directly from inside the `monitoring` VM, without going through Grafana, since Prometheus's port isn't published to the host:
@@ -340,8 +351,10 @@ Documented here deliberately, rather than silently fixed or hidden — these are
 - **`community.crypto` is not version-pinned**, since the Ansible controller installs `ansible` rather than `ansible-core` (a deliberate trade-off to get `community.general`/`community.docker` "for free" — see `Dockerfile`). This means module names/behavior in that collection can shift between a fresh container build and the one the playbooks were originally written against, as already happened once with `openssl_certificate` → `x509_certificate`.
 - **`monitoring` doesn't scrape itself.** `node_exporter` runs on `monitoring` too, but Prometheus's scrape config deliberately excludes it for now — a scope cut for this first pass at the monitoring stack, not an oversight. Adding it back (via `localhost:9100`, since Prometheus and that particular `node_exporter` instance share the same host) is a small, well-understood addition when needed.
 - **No trusted, service-specific Prometheus metrics yet** (Postgres, Nginx, per-container stats via cAdvisor) — this first pass only covers host-level metrics via `node_exporter`. Deliberately scoped this way to get a working skeleton (Prometheus + Grafana + one exporter type, across all hosts) understood end-to-end before adding more exporters and more moving parts at once.
-- **Grafana's Prometheus data source is added manually via the UI**, not provisioned as code. A `provisioning/datasources/*.yml` file mounted into the Grafana container would make this survive a full `vagrant destroy`/`up` without a manual step — not yet done.
+- **No alerting yet.** The dashboard is a "someone has to look at it" tool — nothing currently pages/notifies automatically if a host goes down or a threshold is crossed. The `up`-based status panel and the various threshold colors help at a glance, but only if someone actually opens Grafana; that's a deliberate scope cut for this pass, not a gap that was missed.
 - **The host-side UID (`65534`) for Prometheus's data directory is hardcoded**, matching the specific UID the `prom/prometheus` image happens to run as. If the image is ever swapped for one that uses a different UID, this would need updating in step — there's no dynamic lookup of the "correct" UID from Ansible's side.
+- **`rate()`/`irate()`-based dashboard panels show artifact spikes after the host machine resumes from sleep.** Suspending the physical host also suspends the VMs and the Ansible controller, creating a gap in Prometheus's scraping. Once scraping resumes, `rate()`/`irate()` computed across two samples separated by far more than the normal scrape interval produce artificially high values right at the edge of that gap — a measurement artifact from the gap itself, not real load. Confirmed empirically by comparing the graph against `top` output on the affected host at the same moment. Not something to "fix" so much as to be aware of when reading the graphs after a period of inactivity.
+- **Grafana login sessions don't survive a container recreate.** Only `provisioning/` and `dashboards/` are bind-mounted into the Grafana container, not all of `/var/lib/grafana` — so Grafana's internal session database resets with every fresh container, requiring a fresh login after `vagrant destroy`/`up`. A deliberate trade-off: re-logging in is a trivial, one-time cost per environment rebuild, and the admin credentials are already fully reproducible from Vault either way, so persisting session state didn't seem worth the extra state living outside version control.
 
 ## Troubleshooting notes
 
@@ -377,6 +390,6 @@ Takeaway: when debugging SSH connectivity across virtualized network boundaries,
 - [x] Local Docker registry (`registry` host, `DOCKER-USER`-based access control)
 - [x] Containerized application (Node/Express + Postgres, `site.yml` provisions the full stack)
 - [x] Reverse proxy + TLS (native Nginx on `lb`, automated self-signed cert, round-robin across `app1`/`app2`, HTTP→HTTPS redirect)
-- [ ] Monitoring — infrastructure up and verified end-to-end (`node_exporter` on all six hosts, Prometheus scraping all of them, Grafana querying Prometheus successfully), but not yet actually *useful* as monitoring: no dashboards, no alerting, nothing that would surface a problem without someone manually running PromQL queries
+- [ ] Monitoring — infrastructure up and verified end-to-end (`node_exporter` on all six hosts, Prometheus scraping all of them, Grafana querying Prometheus successfully); dashboards built and provisioned as code (6 panels covering memory, CPU, network, host status, and per-core load average — see `monitoring_setup.yml`); still missing: alerting and self-monitoring of the `monitoring` host itself
 - [ ] Backups and restore testing
 - [ ] CI/CD
