@@ -18,7 +18,7 @@
         published_ports:
           - "5432:5432"
       no_log: true
-      
+
 - name: Add iptables rules for DOCKER-USER chain
   hosts: db
   vars:

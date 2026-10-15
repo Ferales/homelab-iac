@@ -1,0 +1,10 @@
+groups:
+  - name: host_availability
+    rules:
+      - alert: HostDown
+        expr: up{job="node_exporter"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Host {{ $labels.instance }} doesn't respond"

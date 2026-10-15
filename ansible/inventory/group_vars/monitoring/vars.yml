@@ -1,7 +1,13 @@
 prometheus_image: prom/prometheus:v3.14.0
 grafana_image: grafana/grafana:13.2.0
+alertmanager_image: prom/alertmanager:v0.34.0
 prometheus_scrape_interval: 15s
 prometheus_config_path: /opt/monitoring/prometheus/prometheus.yml
 prometheus_data_path: /opt/monitoring/prometheus/data
+prometheus_rules_path: /opt/monitoring/prometheus/rules
 grafana_provisioning_path: /opt/monitoring/grafana/provisioning
 grafana_dashboards_path: /opt/monitoring/grafana/dashboards
+alertmanager_config_path: /opt/monitoring/alertmanager/alertmanager.yml
+alertmanager_data_path: /opt/monitoring/alertmanager/data
+smtp_smarthost: smtp.mailgun.org:587
+smtp_auth_username: alerting@sandbox7b7ff5ac5a0343a1b5ce8f39983eb817.mailgun.org

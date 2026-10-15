@@ -1,9 +1,5 @@
 - name: Start Node Exporter
-  hosts:
-    - apps
-    - registry
-    - db
-    - lb
+  hosts: all
   become: true
 
   roles:
@@ -26,12 +22,31 @@
         owner: "65534"
         mode: '0755' 
 
+    - name: Create Prometheus rules directory
+      ansible.builtin.file:
+        path: "{{ prometheus_rules_path }}"
+        state: directory
+        owner: "65534"
+        mode: '0755'
+
     - name: Create Prometheus configuration file
       ansible.builtin.template:
         src: prometheus.yml.j2
         dest: "{{ prometheus_config_path }}"
         owner: root
         mode: '0644'
+      notify: 
+        - Reload Prometheus
+
+    - name: Create Prometheus rules file
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ prometheus_rules_path }}/{{ item.dest }}"
+        owner: root
+        mode: '0644'
+      loop:
+        - { src: 'templates/prometheus_rules/host_availability.rules.yml', dest: 'host_availability.rules.yml' }
+        - { src: 'templates/prometheus_rules/host_resurces.rules.yml', dest: 'host_resurces.rules.yml' }
       notify: 
         - Reload Prometheus
 
@@ -71,6 +86,23 @@
       loop:
         - { src: 'templates/grafana-provisioning/node_exporter_overview.json', dest: 'node_exporter_overview.json' }
 
+    - name: Create Alertmanager data directory
+      ansible.builtin.file:
+        path: "{{ alertmanager_data_path }}"
+        state: directory
+        owner: root
+        mode: '0755'
+
+    - name: Create Alertmanager configuration file
+      ansible.builtin.template:
+        src: alertmanager.yml.j2
+        dest: "{{ alertmanager_config_path }}"
+        owner: root
+        mode: '0644'
+      no_log: true
+      notify: 
+        - Restart Alertmanager container
+
     - name: Start Prometheus Docker container
       community.docker.docker_container:
         name: prometheus
@@ -82,6 +114,7 @@
         volumes:
           - "{{ prometheus_config_path }}:/etc/prometheus/prometheus.yml"
           - "{{ prometheus_data_path }}:/prometheus"
+          - "{{ prometheus_rules_path }}:/etc/prometheus/rules"
 
     - name: Start Grafana Docker container
       community.docker.docker_container:
@@ -100,8 +133,26 @@
           GF_SECURITY_ADMIN_USER: admin
           GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
       no_log: true
+
+    - name: Start Alertmanager Docker container
+      community.docker.docker_container:
+        name: alertmanager
+        image: "{{ alertmanager_image }}"
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: monitoring
+        ports:
+          - "9093:9093"
+        volumes:
+          - "{{ alertmanager_config_path }}:/etc/alertmanager/alertmanager.yml"
+          - "{{ alertmanager_data_path }}:/alertmanager"
   
   handlers:
     - name: Reload Prometheus
       ansible.builtin.command:
-        cmd: docker kill -s HUP prometheus
+        cmd: docker restart prometheus
+
+    - name: Restart Alertmanager container
+      ansible.builtin.command:
+        cmd: docker restart alertmanager

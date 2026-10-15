@@ -1,0 +1,18 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: "{{ smtp_smarthost }}"
+  smtp_from: "{{ smtp_auth_username }}"
+  smtp_auth_username: "{{ smtp_auth_username }}"
+  smtp_auth_password: "{{ mailgun_smtp_password }}"
+
+route:
+  receiver: webhook-and-email
+
+receivers:
+  - name: webhook-and-email
+    webhook_configs:
+      - url: "{{ lookup('env', 'ALERTMANAGER_WEBHOOK_URL') }}"
+        send_resolved: true
+    email_configs:
+      - to: "{{ lookup('env', 'ALERTMANAGER_RECEIVER_EMAIL') }}"
+        send_resolved: true

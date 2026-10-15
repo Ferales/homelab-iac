@@ -76,6 +76,15 @@
         to_port: "3000"
         proto: tcp
 
+    - name: Allow incoming traffic to Alertmanager
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 192.168.33.1
+        to_ip: "{{ ansible_host }}"
+        to_port: "9093"
+        proto: tcp
+
 - name: Configure firewall on LB server
   hosts: lb
   vars:
@@ -96,8 +105,8 @@
 
       loop: "{{ web_ports }}"
 
-- name: Configure firwall for monitoring traffic
-  hosts: apps, registry, db, lb
+- name: Configure firewall for monitoring traffic
+  hosts: all
   become: true
 
   tasks:
@@ -106,6 +115,20 @@
         rule: allow
         direction: in
         from_ip: 192.168.33.6
+        to_ip: "{{ ansible_host }}"
+        to_port: '9100'
+        proto: tcp
+
+- name: Configure firewall for local monitoring traffic
+  hosts: monitoring
+  become: true
+
+  tasks:
+    - name: Allow incoming traffic from Prometheus container to Node Exporter
+      community.general.ufw:
+        rule: allow
+        direction: in
+        from_ip: 172.18.0.0/16
         to_ip: "{{ ansible_host }}"
         to_port: '9100'
         proto: tcp

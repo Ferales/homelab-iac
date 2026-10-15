@@ -1,0 +1,18 @@
+groups:
+  - name: host_resources
+    rules:
+      - alert: HostHighCpu
+        expr: (1 - avg by (instance, host) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host {{ $labels.host }} CPU usage is high"
+
+      - alert: HostHighMemory
+        expr: ((1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100) > 90
+        for: 7m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host {{ $labels.host }} memory usage is high"

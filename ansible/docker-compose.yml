@@ -1,6 +1,9 @@
 services:
   ansible:
     build: .
+    environment:
+      - ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL}
+      - ALERTMANAGER_RECEIVER_EMAIL=${ALERTMANAGER_RECEIVER_EMAIL}
     volumes:
       - ./:/ansible
       - ${SSH_KEY_PATH}:/keys/homelab_key:ro
