@@ -11,3 +11,5 @@ alertmanager_config_path: /opt/monitoring/alertmanager/alertmanager.yml
 alertmanager_data_path: /opt/monitoring/alertmanager/data
 smtp_smarthost: smtp.mailgun.org:587
 smtp_auth_username: alerting@sandbox7b7ff5ac5a0343a1b5ce8f39983eb817.mailgun.org
+backup_directory: /opt/db_backups
+backup_retention: 5

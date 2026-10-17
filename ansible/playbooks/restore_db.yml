@@ -1,0 +1,49 @@
+- name: Find newest backup file and fetch it to control node
+  hosts: monitoring
+  become: true
+
+  tasks:
+    - name: Find backups
+      ansible.builtin.find:
+        paths: "{{ backup_directory }}"
+        patterns: "db_backup_*.sql"
+      register: backups
+
+    - name: Check if backups exist
+      ansible.builtin.assert:
+        that: backups.matched > 0
+        fail_msg: "No backups found in {{ backup_directory }}"
+        success_msg: "Backups found in {{ backup_directory }}"
+
+    - name: Get newest backup file
+      ansible.builtin.set_fact:
+        newest_backup: "{{ (backups.files | sort(attribute='path') | map(attribute='path') | list)[-1] }}"
+
+    - name: Select backup file to restore
+      ansible.builtin.set_fact:
+        restore_file: "{{ (backup_directory + '/' + backup_file) if backup_file is defined else hostvars['monitoring'].newest_backup }}"
+
+    - name: Fetch restore file to control node
+      ansible.builtin.fetch:
+        src: "{{ restore_file }}"
+        dest: "/tmp/"
+        flat: yes
+
+- name: Copy dump file and restore database
+  hosts: db
+  become: true
+
+  tasks:
+    - name: Copy restore file to database server
+      ansible.builtin.copy:
+        src: "/tmp/{{hostvars['monitoring'].restore_file | basename}}"
+        dest: "/tmp/{{ hostvars['monitoring'].restore_file | basename }}"
+
+    - name: Restore database from dump file
+      ansible.builtin.shell:
+        cmd: docker exec -i db psql -U "{{ postgres_user }}" -d "{{ postgres_db }}" -v ON_ERROR_STOP=1 --single-transaction < "/tmp/{{ hostvars['monitoring'].restore_file | basename }}"
+
+    - name: Remove dump file from database server
+      ansible.builtin.file:
+        path: "/tmp/{{ hostvars['monitoring'].restore_file | basename }}"
+        state: absent

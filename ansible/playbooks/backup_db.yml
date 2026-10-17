@@ -1,0 +1,56 @@
+- name: Create database dump backup
+  hosts: db
+  become: true
+
+  tasks:
+    - name: Generate dump file name with timestamp
+      ansible.builtin.set_fact:
+        dump_file: "/tmp/db_backup_{{ ansible_date_time.iso8601_basic_short }}.sql"
+
+    - name: Create database dump
+      ansible.builtin.shell:
+        cmd: docker exec db pg_dump -U "{{ postgres_user }}" --clean --if-exists "{{ postgres_db }}" > "{{ dump_file }}"
+
+    - name: Validate that dump is complete
+      ansible.builtin.command:
+        cmd: grep -q "PostgreSQL database dump complete" "{{ dump_file }}"
+      changed_when: false
+    
+    - name: Fetch database dump file to control node
+      ansible.builtin.fetch:
+        src: "{{ dump_file }}"
+        dest: "/tmp/"
+        flat: yes
+
+    - name: Remove dump file from database server
+      ansible.builtin.file:
+        path: "{{ dump_file }}"
+        state: absent
+
+- name: Copy dump file to backup directory and manage retention
+  hosts: monitoring
+  become: true
+
+  tasks:
+    - name: Create backup directory if it doesn't exist
+      ansible.builtin.file:
+        dest: "{{ backup_directory }}"
+        state: directory
+
+    - name: Copy dump file to backup directory
+      ansible.builtin.copy:
+        src: "/tmp/{{hostvars['db'].dump_file | basename}}"
+        dest: "{{ backup_directory }}/{{hostvars['db'].dump_file | basename}}"
+
+    - name: Find backups
+      ansible.builtin.find:
+        paths: "{{ backup_directory }}"
+        patterns: "db_backup_*.sql"
+      register: backups
+
+    - name: Remove old backups
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ (backups.files | sort(attribute='path') | map(attribute='path') | list)[:-backup_retention] }}"
+    
